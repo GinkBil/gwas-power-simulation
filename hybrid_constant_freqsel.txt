@@ -1,0 +1,120 @@
+initialize() {
+
+	//setSeed(47574153+sim_iteration);
+    defineConstant("defaultRecRate", 1e-8);
+	
+	// Derived times
+	defineConstant("T_SPLIT", 1 + DUR_PHASE1);
+	defineConstant("T_CONTACT", T_SPLIT + DUR_PHASE2);
+	defineConstant("T_END", T_CONTACT + DUR_PHASE3);
+	
+	defineConstant("simID", getSeed());
+	
+	initializeTreeSeq(timeUnit="generations");
+	initializeMutationRate(0);
+	
+	initializeMutationType("m2", 0.5, "f", 0.0);
+	m2.convertToSubstitution = F;
+	m2.color = "red";
+	
+	initializeGenomicElementType("g1", m2, 1.0);
+	initializeGenomicElement(g1, 0, Chr_Size - 1);
+	initializeRecombinationRate(defaultRecRate);
+}
+
+// ---- Phase-dependent mutation effect ----
+mutationEffect(m2) {
+	gen = sim.cycle;
+	sub_p = individual.subpopulation;
+	
+	// Phase 1
+	if (gen <= T_SPLIT - 1) {
+		f = sim.mutationFrequencies(sub_p, mut);
+		s = (ftar - f) * sel_speed;
+	}
+	
+	// Phase 2
+	if (gen >= T_SPLIT & gen <= T_CONTACT - 1) {
+		f = sim.mutationFrequencies(sub_p, mut);
+		s = (ftar - f) * sel_speed;
+		//if (sub_p == p1)
+		//	s = s_p1;
+		//if (sub_p == p2)
+		//	s = s_p2;
+	}
+	
+	// Phase 3
+	if (gen >= T_CONTACT) {
+		f = sim.mutationFrequencies(sub_p, mut);
+		s = (ftar - f) * sel_speed;
+		//if (sub_p == p1)
+		//	return 1.0;
+		//if (sub_p == p2)
+		//	return 1.0;
+		//if (sub_p == p3)
+		//	return 1.0;
+	}
+	
+	if (homozygous)
+		return 1.0 + s;
+	else
+		return 1.0 + mut.mutationType.dominanceCoeff * s;
+}
+
+// ---- Introduce mutation ----
+function (void) introduce_m2(integer posA) {
+	hapA = p1.haplosomes;
+	sample_ind = sample(hapA, 1);
+	sample_ind.addNewDrawnMutation(m2, posA);
+}
+
+// ---- Generation 1: start single population ----
+1 late() {
+	sim.addSubpop("p1", N);
+	sim.treeSeqOutput(tempdir() + "slim_" + simID + ".trees");
+	introduce_m2(M2A_LOC);
+}
+
+// Monitoring m2 in two loci
+1:(T_SPLIT - 1) late() {
+	count_m2 = size(sim.mutationsOfType(m2));
+	muts = sim.mutationsOfType(m2);
+	
+	if (count_m2 != 1) {
+		cat("Restarting simulation due to loss of mutation...\n");
+		sim.readFromPopulationFile(tempdir() + "slim_" + simID + ".trees");
+		setSeed(rdunif(1, 0, asInteger(2^62 - 1)));
+		introduce_m2(M2A_LOC);
+	}
+}
+
+T_SPLIT late() {
+	sim.addSubpopSplit("p2", N, p1);
+}
+
+T_CONTACT early() {
+	sim.addSubpop("p3", N);
+	
+	// Contact generation: admixture pulse
+	p3.setMigrationRates(c(p1, p2), c(0.5, 0.5));
+}
+
+(T_CONTACT + 1):(T_END - 1) early() {
+	// Phase 3: no migration
+	p3.setMigrationRates(c(p1, p2), c(0.0, 0.0));
+	p1.setMigrationRates(p3, 0.0);
+	p2.setMigrationRates(p3, 0.0);
+}
+
+T_END late() {
+	muts = sim.mutationsOfType(m2);
+	
+	catn("Final frequencies:");
+	catn("p1: " + sim.mutationFrequencies(p1, muts));
+	catn("p2: " + sim.mutationFrequencies(p2, muts));
+	if (exists("p3"))
+		catn("p3: " + sim.mutationFrequencies(p3, muts));
+	
+	sim.treeSeqOutput("./forward.trees");
+	sim.simulationFinished();
+}
